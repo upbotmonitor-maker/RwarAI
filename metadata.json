@@ -1,0 +1,6 @@
+{
+  "name": "Rwar",
+  "description": "ChatGPT tarzı, modern ve gelişmiş yapay zeka asistanı.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
