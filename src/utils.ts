@@ -111,5 +111,37 @@ export function getInitialState(): ChatState {
 
 export function saveStateToLocalStorage(state: ChatState): void {
   const LOCAL_STORAGE_KEY = "rwar_chat_state";
-  localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn("LocalStorage quota exceeded or save error, trying to save pruned state...", error);
+    try {
+      // Create a pruned copy without the large base64 image data to keep local history but free space
+      const prunedState = { ...state };
+      if (prunedState.chats) {
+        // Deep copy chats to avoid mutating active React state directly
+        prunedState.chats = JSON.parse(JSON.stringify(prunedState.chats));
+        for (const chatId in prunedState.chats) {
+          const chat = prunedState.chats[chatId];
+          if (chat && chat.messages) {
+            chat.messages = chat.messages.map((msg: any) => {
+              if (msg.image && msg.image.data) {
+                return {
+                  ...msg,
+                  image: {
+                    ...msg.image,
+                    data: "" // Clear base64 data to save space, keeping the container metadata
+                  }
+                };
+              }
+              return msg;
+            });
+          }
+        }
+      }
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(prunedState));
+    } catch (innerError) {
+      console.error("Failed to save even pruned state to localStorage:", innerError);
+    }
+  }
 }
