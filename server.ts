@@ -38,10 +38,21 @@ app.post("/api/chat", async (req, res) => {
 
     // Format chat history for Gemini API.
     // Translates user messages to roles: 'user' and 'model'
-    const contents = messages.map(msg => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }]
-    }));
+    const contents = messages.map(msg => {
+      const parts: any[] = [{ text: msg.content }];
+      if (msg.image && msg.image.mimeType && msg.image.data) {
+        parts.push({
+          inlineData: {
+            mimeType: msg.image.mimeType,
+            data: msg.image.data
+          }
+        });
+      }
+      return {
+        role: msg.role === "assistant" ? "model" : "user",
+        parts: parts
+      };
+    });
 
     const systemInstruction = `Sen Rwar'sın. ChatGPT benzeri gelişmiş ve samimi bir yapay zeka asistanısın.
 
@@ -70,7 +81,7 @@ CEVAP VERME KURALLARI:
       systemInstruction: systemInstruction,
       temperature: 0.7,
       topP: 0.9,
-      maxOutputTokens: 2048,
+      maxOutputTokens: 8192,
     };
 
     if (searchMode) {

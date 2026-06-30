@@ -22,7 +22,9 @@ import {
   Grid,
   MoreHorizontal,
   Search,
-  Globe
+  Globe,
+  Check,
+  Copy
 } from "lucide-react";
 import { Chat, Message } from "./types";
 import {
@@ -33,6 +35,71 @@ import {
   groupChatsByDate
 } from "./utils";
 import ReactMarkdown from "react-markdown";
+
+function CodeBlock({ children, language }: { children: string; language?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(children);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Metin kopyalanamadı:", err);
+    }
+  };
+
+  return (
+    <div className="relative my-4 rounded-xl overflow-hidden border border-neutral-800 bg-[#0d0d0d] font-mono text-sm shadow-md" id="code-block-container">
+      <div className="flex items-center justify-between px-4 py-2 bg-[#171717] text-neutral-400 text-xs border-b border-neutral-800/80 select-none">
+        <span className="font-sans lowercase">{language || "kod"}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1.5 hover:text-white transition py-1 px-2 rounded hover:bg-[#212121] active:scale-95 text-xs cursor-pointer"
+          title="Kodu Kopyala"
+          id="copy-code-btn"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-green-400" />
+              <span className="text-green-400 font-medium">Kopyalandı!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" />
+              <span>Kopyala</span>
+            </>
+          )}
+        </button>
+      </div>
+      <div className="p-4 overflow-x-auto text-neutral-200 text-[13px] leading-relaxed font-mono">
+        <pre className="whitespace-pre">{children}</pre>
+      </div>
+    </div>
+  );
+}
+
+const markdownComponents = {
+  code({ className, children, ...props }: any) {
+    const match = /language-(\w+)/.exec(className || "");
+    const isInline = !match && typeof children === "string" && !children.includes("\n");
+    const value = String(children).replace(/\n$/, "");
+
+    if (isInline) {
+      return (
+        <code className="bg-[#212121] text-[#f7c06d] px-1.5 py-0.5 rounded text-xs font-mono border border-neutral-800/60" {...props}>
+          {children}
+        </code>
+      );
+    }
+
+    return (
+      <CodeBlock language={match ? match[1] : undefined}>
+        {value}
+      </CodeBlock>
+    );
+  }
+};
 
 export default function App() {
   const [state, setState] = useState(() => getInitialState());
@@ -62,8 +129,14 @@ export default function App() {
   const [searchActive, setSearchActive] = useState(false);
   const [streamingGroundingMetadata, setStreamingGroundingMetadata] = useState<any>(null);
 
-  // Simulated file upload state
-  const [attachedFile, setAttachedFile] = useState<{ name: string; size: string; content?: string } | null>(null);
+  // Real file upload state (supports images as base64 and code/text files as text)
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string;
+    size: string;
+    mimeType?: string;
+    base64?: string;
+    textContent?: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -143,7 +216,13 @@ export default function App() {
     // Prepare content with attachment notice if present
     let finalContent = textToSend;
     if (attachedFile) {
-      finalContent = `[Dosya Eklendi: ${attachedFile.name} (${attachedFile.size})]\n\n${textToSend}`;
+      if (attachedFile.textContent) {
+        finalContent = `[Dosya: ${attachedFile.name}]\n\`\`\`\n${attachedFile.textContent}\n\`\`\`\n\n${textToSend}`;
+      } else if (attachedFile.base64) {
+        finalContent = `[Görsel Eklendi: ${attachedFile.name}]\n\n${textToSend}`;
+      } else {
+        finalContent = `[Dosya Eklendi: ${attachedFile.name} (${attachedFile.size})]\n\n${textToSend}`;
+      }
     }
 
     const userMessage: Message = {
@@ -151,6 +230,14 @@ export default function App() {
       content: finalContent,
       time: messageTime
     };
+
+    if (attachedFile && attachedFile.base64 && attachedFile.mimeType) {
+      userMessage.image = {
+        mimeType: attachedFile.mimeType,
+        data: attachedFile.base64
+      };
+      userMessage.fileName = attachedFile.name;
+    }
 
     // Update state with user message
     const updatedMessages = [...chatsCopy[chatId].messages, userMessage];
@@ -183,7 +270,8 @@ export default function App() {
     try {
       const payloadMessages = updatedMessages.map((m) => ({
         role: m.role,
-        content: m.content
+        content: m.content,
+        image: m.image
       }));
 
       const response = await fetch("/api/chat", {
@@ -367,15 +455,41 @@ export default function App() {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      const sizeStr = file.size > 1024 * 1024 
-        ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
-        : `${(file.size / 1024).toFixed(0)} KB`;
-      setAttachedFile({
-        name: file.name,
-        size: sizeStr
-      });
+    if (!file) return;
+
+    const sizeStr = file.size > 1024 * 1024 
+      ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` 
+      : `${(file.size / 1024).toFixed(0)} KB`;
+
+    const reader = new FileReader();
+
+    if (file.type.startsWith("image/")) {
+      reader.onload = () => {
+        const resultStr = reader.result as string;
+        // Extract the raw base64 part by skipping the data URL prefix
+        const base64Data = resultStr.split(",")[1];
+        setAttachedFile({
+          name: file.name,
+          size: sizeStr,
+          mimeType: file.type,
+          base64: base64Data
+        });
+      };
+      reader.readAsDataURL(file);
+    } else {
+      // Treat as a text or code file
+      reader.onload = () => {
+        setAttachedFile({
+          name: file.name,
+          size: sizeStr,
+          mimeType: file.type || "text/plain",
+          textContent: reader.result as string
+        });
+      };
+      reader.readAsText(file);
     }
+    // Reset target value so the user can upload the same file again if they wish
+    e.target.value = "";
   };
 
   // Grouped chats (filtered by search query if any)
@@ -735,14 +849,24 @@ export default function App() {
                       {/* Message Body */}
                       {isUser ? (
                         /* User Message: Clean dark gray pill on the right, exactly matching ChatGPT web/mobile */
-                        <div className="rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed break-words bg-[#212121] text-neutral-100 font-light">
+                        <div className="rounded-2xl px-4 py-2.5 text-[14.5px] leading-relaxed break-words bg-[#212121] text-neutral-100 font-light space-y-2">
+                          {msg.image && (
+                            <div className="max-w-xs md:max-w-sm rounded-lg overflow-hidden border border-neutral-700 bg-neutral-900 shadow-sm">
+                              <img
+                                src={`data:${msg.image.mimeType};base64,${msg.image.data}`}
+                                alt={msg.fileName || "Görsel"}
+                                className="max-h-60 w-auto object-contain rounded"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          )}
                           <div className="whitespace-pre-wrap">{msg.content}</div>
                         </div>
                       ) : (
                         /* Assistant Message: No background bubble, clean text aligned elegantly with great line-height */
                         <div className="text-[14.5px] leading-relaxed break-words text-neutral-200 font-light font-sans">
                           <div className="prose prose-invert prose-sm max-w-none text-neutral-200">
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            <ReactMarkdown components={markdownComponents}>{msg.content}</ReactMarkdown>
                           </div>
 
                           {msg.groundingMetadata?.groundingChunks && msg.groundingMetadata.groundingChunks.length > 0 && (
@@ -800,7 +924,7 @@ export default function App() {
                   <div className="flex-1 max-w-[90%]">
                     <div className="text-[14.5px] leading-relaxed break-words text-neutral-200 font-light font-sans">
                       <div className="prose prose-invert prose-sm max-w-none text-neutral-200 inline">
-                        <ReactMarkdown>{streamingText}</ReactMarkdown>
+                        <ReactMarkdown components={markdownComponents}>{streamingText}</ReactMarkdown>
                       </div>
                       <span className="inline-block h-4 w-2 bg-neutral-400 ml-1.5 animate-pulse rounded-xs align-middle"></span>
 
@@ -867,9 +991,17 @@ export default function App() {
             {attachedFile && (
               <div className="flex items-center justify-between bg-[#212121] border border-neutral-800 rounded-xl px-4 py-2.5 mb-3 text-xs text-neutral-300" id="attachment-preview">
                 <div className="flex items-center gap-2.5">
-                  <FileText className="h-4 w-4 text-sky-400" />
-                  <div>
-                    <span className="font-medium text-white block">{attachedFile.name}</span>
+                  {attachedFile.mimeType?.startsWith("image/") && attachedFile.base64 ? (
+                    <img
+                      src={`data:${attachedFile.mimeType};base64,${attachedFile.base64}`}
+                      alt="Görsel önizleme"
+                      className="h-8 w-8 object-cover rounded border border-neutral-700 shrink-0"
+                    />
+                  ) : (
+                    <FileText className="h-4 w-4 text-sky-400 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <span className="font-medium text-white block truncate max-w-[200px] md:max-w-[350px]">{attachedFile.name}</span>
                     <span className="text-neutral-500 font-light">{attachedFile.size}</span>
                   </div>
                 </div>
